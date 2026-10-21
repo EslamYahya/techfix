@@ -1,0 +1,14 @@
+{
+  "extends": "@techfix/config/tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist",
+    "rootDir": ".",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["src", "test", "vitest.config.ts"]
+}

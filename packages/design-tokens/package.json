@@ -1,0 +1,15 @@
+{
+  "name": "@techfix/design-tokens",
+  "version": "0.1.0",
+  "private": true,
+  "exports": {
+    "./tokens.css": "./src/tokens.css",
+    "./tailwind.css": "./src/tailwind.css"
+  },
+  "scripts": {
+    "build": "echo ok",
+    "typecheck": "echo ok",
+    "test": "echo ok",
+    "lint": "echo ok"
+  }
+}

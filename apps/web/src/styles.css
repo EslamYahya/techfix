@@ -1,0 +1,12 @@
+@import 'tailwindcss';
+@import '@techfix/design-tokens/tokens.css';
+@import '@techfix/design-tokens/tailwind.css';
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  background: var(--paper);
+  color: var(--ink);
+  line-height: 1.75;
+  min-height: 100dvh;
+}

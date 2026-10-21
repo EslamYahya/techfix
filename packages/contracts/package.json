@@ -1,0 +1,40 @@
+{
+  "name": "@techfix/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "API contract: openapi.yaml is the source; types are generated from it.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "openapi.yaml"
+  ],
+  "scripts": {
+    "generate": "openapi-typescript openapi.yaml -o src/api.d.ts",
+    "build": "pnpm generate && tsup src/index.ts --format esm,cjs --dts --clean",
+    "typecheck": "pnpm generate && tsc --noEmit",
+    "test": "vitest run",
+    "lint": "redocly lint openapi.yaml"
+  },
+  "dependencies": {
+    "@techfix/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@redocly/cli": "^1.25.0",
+    "@techfix/config": "workspace:*",
+    "@types/node": "^22.0.0",
+    "openapi-typescript": "^7.4.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "yaml": "^2.6.0"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "techfix-backend-reference",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TechFix backend reference: data model, API contract and the pure domain logic the NestJS services must call.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prisma:validate": "node scripts/validate-prisma.mjs",
+    "openapi:lint": "redocly lint openapi.yaml"
+  },
+  "devDependencies": {
+    "@prisma/client": "^6.0.0",
+    "@prisma/prisma-schema-wasm": "^6.19.0-33.next-fca7ed8aa5fe6347594ad793adb59b37f021379a",
+    "@redocly/cli": "^1.25.0",
+    "@types/node": "^22.0.0",
+    "prisma": "^6.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "yaml": "^2.9.1"
+  }
+}

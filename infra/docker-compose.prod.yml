@@ -1,0 +1,77 @@
+# Single-host production-like stack. Copy infra/prod.env.example to infra/prod.env and fill it in.
+#   docker compose -f infra/docker-compose.prod.yml --env-file infra/prod.env up -d --build
+# TLS is terminated in front of this stack (a load balancer or Caddy/Traefik); `web` listens on 80.
+x-api: &api
+  build: { context: .., dockerfile: infra/docker/api.Dockerfile }
+  env_file: prod.env
+  environment:
+    NODE_ENV: production
+    STORE: postgres
+    DATABASE_URL: postgresql://techfix:${POSTGRES_PASSWORD}@postgres:5432/techfix
+    REDIS_URL: redis://redis:6379
+    TRUST_PROXY: '1'
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+    migrate: { condition: service_completed_successfully }
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: techfix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: techfix
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U techfix']
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # One-shot: applies the SQL migrations (including the PostGIS part) before anything starts.
+  migrate:
+    build: { context: .., dockerfile: infra/docker/api.Dockerfile }
+    command: ['pnpm', '--filter', '@techfix/db', 'migrate:deploy']
+    environment:
+      DATABASE_URL: postgresql://techfix:${POSTGRES_PASSWORD}@postgres:5432/techfix
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck: { disable: true }
+    restart: 'no'
+
+  api:
+    <<: *api
+    environment:
+      NODE_ENV: production
+      STORE: postgres
+      DATABASE_URL: postgresql://techfix:${POSTGRES_PASSWORD}@postgres:5432/techfix
+      REDIS_URL: redis://redis:6379
+      TRUST_PROXY: '1'
+      RUN_WORKERS: 'false' # the worker service runs the schedules, so replicas of the API stay stateless
+
+  worker:
+    <<: *api
+    command: ['node', 'apps/api/dist/worker.js']
+    healthcheck: { disable: true }
+
+  web:
+    build: { context: .., dockerfile: infra/docker/web.Dockerfile }
+    ports: ['80:80']
+    depends_on: [api]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

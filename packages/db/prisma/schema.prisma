@@ -1,0 +1,711 @@
+// TechFix — Data model (Release v1 + final-product placeholders)
+// Source of truth: docs/02-data-model.md. PostGIS columns are added in SQL migration
+// (see prisma/migrations-notes/postgis.sql) because Prisma models them as Unsupported().
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated"
+}
+
+// Prisma 7: the connection URL lives in prisma.config.ts, not here.
+// PostGIS is enabled by prisma/notes/postgis.sql (CREATE EXTENSION) in the first migration.
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────── Enums ─────────────────────────
+
+enum Role {
+  CUSTOMER
+  ENGINEER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING
+}
+
+enum EngineerType {
+  FREELANCE
+  SHOP_OWNER // flag only — NOT a role
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum AvailabilityStatus {
+  AVAILABLE
+  OFFLINE
+  BUSY
+}
+
+enum RequestStatus {
+  REQUESTED
+  MATCHING
+  ENGINEER_SELECTED
+  ENGINEER_ACCEPTED
+  QUOTE_SENT
+  QUOTE_REJECTED
+  QUOTE_ACCEPTED
+  CONFIRMED
+  ON_THE_WAY
+  ARRIVED
+  IN_PROGRESS
+  COMPLETION_PENDING
+  COMPLETED
+  RATED
+  CANCELLED
+}
+
+enum QuoteKind {
+  MAIN
+  ADDITIONAL
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CANCELLED // withdrawn/replaced; never edited in place
+}
+
+enum QuoteItemType {
+  LABOR
+  MATERIAL
+  OTHER
+}
+
+enum PaymentMethod {
+  CASH
+  ONLINE
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum TimeSlot {
+  MORNING // 09–12
+  NOON // 12–16
+  EVENING // 16–20
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  REJECTED
+}
+
+enum NotificationChannel {
+  IN_APP
+  PUSH
+  SMS
+  WHATSAPP
+}
+
+// ───────────────────────── Identity ─────────────────────────
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  name         String
+  email        String?    @unique
+  phone        String     @unique
+  passwordHash String     @map("password_hash")
+  role         Role
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  customer        CustomerProfile?
+  engineer        EngineerProfile?
+  refreshTokens   RefreshToken[]
+  notifications   Notification[]
+  auditLogs       AuditLog[]
+  openedDisputes  Dispute[]        @relation("DisputeOpener")
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  String    @unique @map("token_hash") // store hash only, rotate on use
+  familyId   String    @map("family_id") @db.Uuid // reuse of a revoked token revokes the family
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model CustomerProfile {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user      User             @relation(fields: [userId], references: [id])
+  addresses CustomerAddress[]
+  requests  ServiceRequest[]
+  jobs      Job[]
+  reviews   Review[]
+
+  @@map("customer_profiles")
+}
+
+model CustomerAddress {
+  id         String   @id @default(uuid()) @db.Uuid
+  customerId String   @map("customer_id") @db.Uuid
+  label      String
+  address    String
+  city       String?
+  area       String?
+  // point geography(Point,4326) is added via SQL migration
+  latitude   Float
+  longitude  Float
+  isDefault  Boolean  @default(false) @map("is_default")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  customer CustomerProfile @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("customer_addresses")
+}
+
+model EngineerProfile {
+  id                 String             @id @default(uuid()) @db.Uuid
+  userId             String             @unique @map("user_id") @db.Uuid
+  engineerType       EngineerType       @default(FREELANCE) @map("engineer_type")
+  bio                String?
+  experienceYears    Int                @default(0) @map("experience_years")
+  verificationStatus VerificationStatus @default(PENDING) @map("verification_status")
+  rejectionReason    String?            @map("rejection_reason")
+  availabilityStatus AvailabilityStatus @default(OFFLINE) @map("availability_status")
+  serviceRadiusKm    Int                @default(15) @map("service_radius_km")
+  // denormalised aggregates — recomputed by worker (docs/08)
+  ratingAverage      Decimal            @default(0) @map("rating_average") @db.Decimal(3, 2)
+  ratingCount        Int                @default(0) @map("rating_count")
+  completedJobsCount Int                @default(0) @map("completed_jobs_count")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  user         User                 @relation(fields: [userId], references: [id])
+  services     EngineerService[]
+  locations    EngineerLocation[]
+  schedule     Availability[]
+  documents    EngineerDocument[]
+  requests     ServiceRequest[]     @relation("SelectedEngineer")
+  quotes       Quote[]
+  jobs         Job[]
+  reviews      Review[]
+  shop         Shop?
+
+  @@index([verificationStatus, availabilityStatus])
+  @@map("engineer_profiles")
+}
+
+model EngineerDocument {
+  id         String    @id @default(uuid()) @db.Uuid
+  engineerId String    @map("engineer_id") @db.Uuid
+  kind       String // NATIONAL_ID | CERTIFICATE | ...
+  fileKey    String    @map("file_key") // object-storage key, never a public URL
+  reviewedAt DateTime? @map("reviewed_at")
+  approved   Boolean?
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  engineer EngineerProfile @relation(fields: [engineerId], references: [id], onDelete: Cascade)
+
+  @@index([engineerId])
+  @@map("engineer_documents")
+}
+
+// ───────────────────────── Catalog ─────────────────────────
+
+model ServiceCategory {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  slug        String   @unique
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  services Service[]
+
+  @@map("service_categories")
+}
+
+model Service {
+  id          String   @id @default(uuid()) @db.Uuid
+  categoryId  String   @map("category_id") @db.Uuid
+  name        String
+  slug        String   @unique
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  category  ServiceCategory   @relation(fields: [categoryId], references: [id])
+  engineers EngineerService[]
+  requests  ServiceRequest[]
+
+  @@index([categoryId])
+  @@map("services")
+}
+
+model EngineerService {
+  id         String   @id @default(uuid()) @db.Uuid
+  engineerId String   @map("engineer_id") @db.Uuid
+  serviceId  String   @map("service_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  engineer EngineerProfile @relation(fields: [engineerId], references: [id], onDelete: Cascade)
+  service  Service         @relation(fields: [serviceId], references: [id])
+
+  @@unique([engineerId, serviceId])
+  @@index([serviceId])
+  @@map("engineer_services")
+}
+
+model EngineerLocation {
+  id         String   @id @default(uuid()) @db.Uuid
+  engineerId String   @map("engineer_id") @db.Uuid
+  // point geography(Point,4326) + GIST index are added via SQL migration
+  latitude   Float
+  longitude  Float
+  address    String?
+  city       String?
+  area       String?
+  isPrimary  Boolean  @default(true) @map("is_primary")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  engineer EngineerProfile @relation(fields: [engineerId], references: [id], onDelete: Cascade)
+
+  @@index([engineerId])
+  @@map("engineer_locations")
+}
+
+model Availability {
+  id         String  @id @default(uuid()) @db.Uuid
+  engineerId String  @map("engineer_id") @db.Uuid
+  dayOfWeek  Int     @map("day_of_week") // 0=Sunday … 6=Saturday, CHECK 0..6
+  startTime  String  @map("start_time") // "HH:mm"
+  endTime    String  @map("end_time")
+  isActive   Boolean @default(true) @map("is_active")
+
+  engineer EngineerProfile @relation(fields: [engineerId], references: [id], onDelete: Cascade)
+
+  @@index([engineerId])
+  @@map("availabilities")
+}
+
+// ───────────────────────── Marketplace core ─────────────────────────
+
+model ServiceRequest {
+  id                 String        @id @default(uuid()) @db.Uuid
+  publicNumber       Int           @unique @default(autoincrement()) @map("public_number") // shown as R-1064
+  customerId         String        @map("customer_id") @db.Uuid
+  serviceId          String        @map("service_id") @db.Uuid
+  subServiceLabel    String?       @map("sub_service_label")
+  selectedEngineerId String?       @map("selected_engineer_id") @db.Uuid
+  description        String
+  preferredDate      DateTime      @map("preferred_date") @db.Date
+  preferredSlot      TimeSlot?     @map("preferred_slot")
+  preferredStartTime String?       @map("preferred_start_time")
+  preferredEndTime   String?       @map("preferred_end_time")
+  status             RequestStatus @default(MATCHING)
+  cancelReason       String?       @map("cancel_reason")
+  cancelledBy        Role?         @map("cancelled_by")
+  version            Int           @default(0) // optimistic lock for every transition
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+
+  customer  CustomerProfile    @relation(fields: [customerId], references: [id])
+  service   Service            @relation(fields: [serviceId], references: [id])
+  engineer  EngineerProfile?   @relation("SelectedEngineer", fields: [selectedEngineerId], references: [id])
+  location  RequestLocation?
+  attachments RequestAttachment[]
+  rejections  EngineerRejection[]
+  quotes    Quote[]
+  job       Job?
+  events    RequestEvent[]
+
+  @@index([customerId, status])
+  @@index([selectedEngineerId, status])
+  @@index([status])
+  @@index([serviceId])
+  @@map("service_requests")
+}
+
+model RequestLocation {
+  id        String  @id @default(uuid()) @db.Uuid
+  requestId String  @unique @map("request_id") @db.Uuid
+  // point geography(Point,4326) + GIST index are added via SQL migration
+  latitude  Float
+  longitude Float
+  address   String // full address — hidden from engineer until CONFIRMED
+  city      String?
+  area      String? // coarse area — visible to engineer from the start
+
+  request ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@map("request_locations")
+}
+
+model RequestAttachment {
+  id        String   @id @default(uuid()) @db.Uuid
+  requestId String   @map("request_id") @db.Uuid
+  fileKey   String   @map("file_key")
+  fileType  String   @map("file_type")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  request ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+  @@map("service_request_attachments")
+}
+
+// An engineer who declined/timed out is excluded from the next matching round.
+model EngineerRejection {
+  id         String   @id @default(uuid()) @db.Uuid
+  requestId  String   @map("request_id") @db.Uuid
+  engineerId String   @map("engineer_id") @db.Uuid
+  reason     String?
+  timedOut   Boolean  @default(false) @map("timed_out")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  request ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, engineerId])
+  @@map("engineer_rejections")
+}
+
+// Append-only timeline shown to customer/engineer/admin (labels are resolved client-side per role).
+model RequestEvent {
+  id        String         @id @default(uuid()) @db.Uuid
+  requestId String         @map("request_id") @db.Uuid
+  fromState RequestStatus? @map("from_state")
+  toState   RequestStatus  @map("to_state")
+  actorId   String?        @map("actor_id") @db.Uuid // null = system
+  actorRole Role?          @map("actor_role")
+  code      String // machine code e.g. QUOTE_SENT, ADDITIONAL_QUOTE_SENT, CASH_RECEIVED
+  data      Json?
+  createdAt DateTime       @default(now()) @map("created_at")
+
+  request ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+  @@map("request_events")
+}
+
+model Quote {
+  id                       String      @id @default(uuid()) @db.Uuid
+  requestId                String      @map("request_id") @db.Uuid
+  engineerId               String      @map("engineer_id") @db.Uuid
+  kind                     QuoteKind   @default(MAIN)
+  parentQuoteId            String?     @map("parent_quote_id") @db.Uuid // ADDITIONAL → the accepted MAIN
+  status                   QuoteStatus @default(DRAFT)
+  subtotal                 Decimal     @db.Decimal(12, 2)
+  total                    Decimal     @db.Decimal(12, 2) // computed server-side only
+  notes                    String?
+  estimatedDurationMinutes Int         @map("estimated_duration_minutes")
+  rejectionReason          String?     @map("rejection_reason")
+  expiresAt                DateTime?   @map("expires_at")
+  sentAt                   DateTime?   @map("sent_at")
+  decidedAt                DateTime?   @map("decided_at")
+  createdAt                DateTime    @default(now()) @map("created_at")
+  updatedAt                DateTime    @updatedAt @map("updated_at")
+
+  request  ServiceRequest   @relation(fields: [requestId], references: [id])
+  engineer EngineerProfile  @relation(fields: [engineerId], references: [id])
+  parent   Quote?           @relation("AdditionalQuotes", fields: [parentQuoteId], references: [id])
+  extras   Quote[]          @relation("AdditionalQuotes")
+  items    QuoteItem[]
+  job      Job?             @relation("JobMainQuote")
+
+  @@index([requestId])
+  @@index([engineerId, status])
+  @@map("quotes")
+}
+
+model QuoteItem {
+  id          String        @id @default(uuid()) @db.Uuid
+  quoteId     String        @map("quote_id") @db.Uuid
+  itemType    QuoteItemType @map("item_type")
+  description String
+  quantity    Decimal       @db.Decimal(10, 2)
+  unitPrice   Decimal       @map("unit_price") @db.Decimal(12, 2)
+  totalPrice  Decimal       @map("total_price") @db.Decimal(12, 2)
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@index([quoteId])
+  @@map("quote_items")
+}
+
+// Job = actual execution. Created when a quote is accepted; separate from the request.
+model Job {
+  id               String        @id @default(uuid()) @db.Uuid
+  requestId        String        @unique @map("request_id") @db.Uuid
+  quoteId          String        @unique @map("quote_id") @db.Uuid // the accepted MAIN quote
+  customerId       String        @map("customer_id") @db.Uuid
+  engineerId       String        @map("engineer_id") @db.Uuid
+  status           RequestStatus @default(QUOTE_ACCEPTED) // mirrors the request from CONFIRMED on
+  scheduledAt      DateTime?     @map("scheduled_at")
+  confirmedAt      DateTime?     @map("confirmed_at")
+  startedTripAt    DateTime?     @map("started_trip_at")
+  arrivedAt        DateTime?     @map("arrived_at")
+  startedAt        DateTime?     @map("started_at")
+  completedAt      DateTime?     @map("completed_at")
+  confirmedByCustomerAt DateTime? @map("confirmed_by_customer_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  request  ServiceRequest  @relation(fields: [requestId], references: [id])
+  quote    Quote           @relation("JobMainQuote", fields: [quoteId], references: [id])
+  customer CustomerProfile @relation(fields: [customerId], references: [id])
+  engineer EngineerProfile @relation(fields: [engineerId], references: [id])
+  payments Payment[]
+  review   Review?
+  disputes Dispute[]
+
+  @@index([engineerId, status])
+  @@index([customerId, status])
+  @@map("jobs")
+}
+
+// One job may have several payment rows (e.g. online deposit + cash balance, additional-quote top-up, retry).
+model Payment {
+  id             String        @id @default(uuid()) @db.Uuid
+  jobId          String        @map("job_id") @db.Uuid
+  amount         Decimal       @db.Decimal(12, 2)
+  method         PaymentMethod
+  status         PaymentStatus @default(PENDING)
+  provider       String? // "fawry" for ONLINE; null for CASH
+  providerRef    String?       @map("provider_ref") // provider order/transaction id
+  idempotencyKey String?       @map("idempotency_key")
+  failureReason  String?       @map("failure_reason")
+  refundedAmount Decimal       @default(0) @map("refunded_amount") @db.Decimal(12, 2) // sum of refunds; kept in step by the refund transaction
+  expiresAt      DateTime?     @map("expires_at") // provider order expiry (Fawry reference validity)
+  paidAt         DateTime?     @map("paid_at")
+  confirmedBy    String?       @map("confirmed_by") @db.Uuid // engineer who confirmed cash
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  job     Job              @relation(fields: [jobId], references: [id])
+  refunds PaymentRefund[]
+
+  @@unique([provider, providerRef])
+  @@unique([jobId, idempotencyKey])
+  @@index([jobId, status])
+  @@map("payments")
+}
+
+model PaymentRefund {
+  id        String   @id @default(uuid()) @db.Uuid
+  paymentId String   @map("payment_id") @db.Uuid
+  amount    Decimal  @db.Decimal(12, 2)
+  reason    String
+  createdBy String   @map("created_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  payment Payment @relation(fields: [paymentId], references: [id])
+
+  @@map("payment_refunds")
+}
+
+// Raw provider callbacks, stored before processing → replay-safe & auditable.
+model WebhookEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  provider    String
+  externalId  String    @map("external_id") // provider event id
+  payload     Json
+  signatureOk Boolean   @map("signature_ok")
+  processedAt DateTime? @map("processed_at")
+  error       String?
+  receivedAt  DateTime  @default(now()) @map("received_at")
+
+  @@unique([provider, externalId])
+  @@map("webhook_events")
+}
+
+model Review {
+  id         String   @id @default(uuid()) @db.Uuid
+  jobId      String   @unique @map("job_id") @db.Uuid
+  customerId String   @map("customer_id") @db.Uuid
+  engineerId String   @map("engineer_id") @db.Uuid
+  rating     Int // CHECK 1..5 in SQL migration
+  comment    String?
+  isHidden   Boolean  @default(false) @map("is_hidden") // reviews.moderate
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  job      Job             @relation(fields: [jobId], references: [id])
+  customer CustomerProfile @relation(fields: [customerId], references: [id])
+  engineer EngineerProfile @relation(fields: [engineerId], references: [id])
+
+  @@index([engineerId])
+  @@map("reviews")
+}
+
+model Dispute {
+  id             String        @id @default(uuid()) @db.Uuid
+  jobId          String        @map("job_id") @db.Uuid
+  openedByUserId String        @map("opened_by_user_id") @db.Uuid
+  reason         String // CUSTOMER_NO_SHOW | ENGINEER_NO_SHOW | QUALITY | PRICE | OTHER
+  description    String
+  status         DisputeStatus @default(OPEN)
+  resolution     String?
+  resolvedBy     String?       @map("resolved_by") @db.Uuid
+  resolvedAt     DateTime?     @map("resolved_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  job      Job  @relation(fields: [jobId], references: [id])
+  openedBy User @relation("DisputeOpener", fields: [openedByUserId], references: [id])
+
+  @@index([jobId])
+  @@index([status])
+  @@map("disputes")
+}
+
+// ───────────────────────── Platform ─────────────────────────
+
+model Notification {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  type      String // machine code → client resolves Arabic text; `title/body` are a fallback
+  title     String
+  body      String
+  data      Json? // { requestId, jobId } → deep link
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+model DeviceToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  token     String   @unique
+  platform  String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("device_tokens")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  action      String // e.g. quote.accept, engineer.verify, payment.webhook.paid
+  entityType  String   @map("entity_type")
+  entityId    String   @map("entity_id")
+  beforeData  Json?    @map("before_data")
+  afterData   Json?    @map("after_data")
+  requestId   String?  @map("request_id") // correlation id from the HTTP request
+  ip          String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  actor User? @relation(fields: [actorUserId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorUserId, createdAt])
+  @@map("audit_logs")
+}
+
+// Admin-tunable settings (weights, commission, timeouts). Versioned by updatedAt; changes audited.
+model PlatformSetting {
+  key       String   @id
+  value     Json
+  updatedBy String?  @map("updated_by") @db.Uuid
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_settings")
+}
+
+// ───────────────────────── Phase 2 (kept so the model is complete) ─────────────────────────
+
+model Shop {
+  id          String   @id @default(uuid()) @db.Uuid
+  engineerId  String   @unique @map("engineer_id") @db.Uuid
+  name        String
+  description String?
+  phone       String?
+  status      String   @default("PENDING")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  engineer EngineerProfile @relation(fields: [engineerId], references: [id])
+  products Product[]
+
+  @@map("shops")
+}
+
+model Product {
+  id            String   @id @default(uuid()) @db.Uuid
+  shopId        String   @map("shop_id") @db.Uuid
+  name          String
+  description   String?
+  sku           String?
+  price         Decimal  @db.Decimal(12, 2)
+  stockQuantity Int      @default(0) @map("stock_quantity")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  shop Shop @relation(fields: [shopId], references: [id])
+
+  @@index([shopId])
+  @@map("products")
+}
+
+// Written inside the same transaction as a state change; a worker publishes it (docs/08).
+model OutboxEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  type        String // e.g. QuoteSent, BookingConfirmed
+  payload     Json
+  attempts    Int       @default(0)
+  nextRunAt   DateTime  @default(now()) @map("next_run_at")
+  publishedAt DateTime? @map("published_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([publishedAt, nextRunAt])
+  @@map("outbox_events")
+}
+
+// Idempotency-Key replay store (docs/04): same key + same body hash => same stored response.
+model IdempotencyKey {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  route        String
+  key          String
+  bodyHash     String   @map("body_hash")
+  responseCode Int      @map("response_code")
+  responseBody Json     @map("response_body")
+  expiresAt    DateTime @map("expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, route, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}

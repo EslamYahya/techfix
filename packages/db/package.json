@@ -1,0 +1,39 @@
+{
+  "name": "@techfix/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "generate": "prisma generate",
+    "validate": "prisma validate",
+    "validate:offline": "node scripts/validate-schema.mjs",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "typecheck": "tsc --noEmit",
+    "build": "tsup src/index.ts --format esm --dts --clean --external @prisma/client --external @prisma/adapter-pg --external pg",
+    "test": "echo \"no unit tests (integration tests live in apps/api)\"",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.0.0",
+    "@prisma/client": "^7.0.0",
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@prisma/prisma-schema-wasm": "7.10.0-4.0edf323efd1d98336f3f0a68684b56f689b900d3",
+    "@techfix/config": "workspace:*",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "prisma": "^7.0.0",
+    "typescript": "^5.9.0",
+    "tsup": "^8.5.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  }
+}

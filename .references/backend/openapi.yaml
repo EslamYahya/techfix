@@ -1,0 +1,623 @@
+openapi: 3.0.3
+info:
+  title: TechFix API
+  version: 1.0.0
+  description: |
+    REST contract for the TechFix marketplace (customers ↔ field engineers).
+    Conventions: docs/04-api-conventions.md. State rules: docs/03-state-machines.md.
+    Authorization is always Permission + Ownership + Current state, enforced server-side.
+servers:
+  - url: https://api.techfix.example/api/v1
+security:
+  - bearerAuth: []
+tags:
+  - { name: Auth }
+  - { name: Customers }
+  - { name: Engineers }
+  - { name: Services }
+  - { name: Requests }
+  - { name: Quotes }
+  - { name: Jobs }
+  - { name: Payments }
+  - { name: Reviews }
+  - { name: Notifications }
+  - { name: Admin }
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Create a customer or engineer account (engineers start PENDING verification)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RegisterInput' } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResult' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Log in
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LoginInput' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResult' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Rotate the refresh token (a reused token revokes the whole family)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [refreshToken], properties: { refreshToken: { type: string } } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResult' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the refresh token family
+      responses: { '204': { description: No content } }
+
+  /customers/me:
+    get: { tags: [Customers], summary: My profile, responses: { '200': { $ref: '#/components/responses/Ok' } } }
+    patch: { tags: [Customers], summary: Update my profile, responses: { '200': { $ref: '#/components/responses/Ok' }, '422': { $ref: '#/components/responses/Validation' } } }
+  /customers/me/addresses:
+    get: { tags: [Customers], summary: Saved addresses, responses: { '200': { $ref: '#/components/responses/Ok' } } }
+    post: { tags: [Customers], summary: Save an address, responses: { '201': { $ref: '#/components/responses/Ok' }, '422': { $ref: '#/components/responses/Validation' } } }
+
+  /engineers/me:
+    get: { tags: [Engineers], summary: My engineer profile (includes verification & account state), responses: { '200': { $ref: '#/components/responses/Ok' } } }
+    patch: { tags: [Engineers], summary: Update bio / radius / shop flag, responses: { '200': { $ref: '#/components/responses/Ok' }, '422': { $ref: '#/components/responses/Validation' } } }
+  /engineers/me/documents:
+    post: { tags: [Engineers], summary: Upload a verification document (object-storage key), responses: { '201': { $ref: '#/components/responses/Ok' } } }
+  /engineers/me/status:
+    patch:
+      tags: [Engineers]
+      summary: Set current availability (only VERIFIED + ACTIVE engineers)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [status], properties: { status: { $ref: '#/components/schemas/AvailabilityStatus' } } } } } }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /engineers/me/availability:
+    get: { tags: [Engineers], summary: Weekly schedule, responses: { '200': { $ref: '#/components/responses/Ok' } } }
+    put: { tags: [Engineers], summary: Replace weekly schedule, responses: { '200': { $ref: '#/components/responses/Ok' }, '422': { $ref: '#/components/responses/Validation' } } }
+  /engineers/me/location:
+    patch:
+      tags: [Engineers]
+      summary: Set service-base location (server validates coordinates are inside the supported area)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/GeoPoint' } } } }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '422': { $ref: '#/components/responses/Validation' } }
+  /engineers/me/services:
+    get: { tags: [Engineers], summary: My specialisations, responses: { '200': { $ref: '#/components/responses/Ok' } } }
+    post: { tags: [Engineers], summary: Add a specialisation (service must exist and be active), responses: { '201': { $ref: '#/components/responses/Ok' }, '409': { $ref: '#/components/responses/Conflict' } } }
+  /engineers/me/services/{serviceId}:
+    delete:
+      tags: [Engineers]
+      summary: Remove a specialisation
+      parameters: [{ $ref: '#/components/parameters/ServiceId' }]
+      responses: { '204': { description: No content } }
+  /engineers/{engineerId}:
+    get:
+      tags: [Engineers]
+      summary: Public engineer card (no phone, no exact location)
+      parameters: [{ $ref: '#/components/parameters/EngineerId' }]
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /engineers/{engineerId}/reviews:
+    get:
+      tags: [Reviews]
+      summary: Reviews of an engineer (hidden ones excluded)
+      parameters: [{ $ref: '#/components/parameters/EngineerId' }, { $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+  /engineer/requests:
+    get:
+      tags: [Engineers]
+      summary: Requests assigned to me (customer address/phone redacted until CONFIRMED)
+      parameters: [{ $ref: '#/components/parameters/StatusFilter' }, { $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+  /engineer/earnings:
+    get:
+      tags: [Engineers]
+      summary: Gross / commission / net per job (Phase 1 read-only statement; wallet is Phase 3)
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /engineers/{engineerId}/jobs:
+    get:
+      tags: [Engineers]
+      summary: List jobs for an engineer
+      parameters:
+        - $ref: '#/components/parameters/EngineerId'
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+
+  /service-categories:
+    get: { tags: [Services], security: [], summary: Active categories, responses: { '200': { $ref: '#/components/responses/Ok' } } }
+  /services:
+    get:
+      tags: [Services]
+      security: []
+      summary: Active services
+      parameters: [{ name: category, in: query, schema: { type: string }, description: Category slug }]
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+  /services/{serviceId}:
+    get:
+      tags: [Services]
+      security: []
+      summary: One service
+      parameters: [{ $ref: '#/components/parameters/ServiceId' }]
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+
+  /service-requests:
+    post:
+      tags: [Requests]
+      summary: Create a request → status MATCHING (customer only)
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateRequestInput' } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/RequestSummaryEnvelope' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+    get:
+      tags: [Requests]
+      summary: "My requests (customer: own; engineer: use /engineer/requests; admin: use /admin/service-requests)"
+      parameters: [{ $ref: '#/components/parameters/StatusFilter' }, { $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+  /service-requests/{requestId}:
+    get:
+      tags: [Requests]
+      summary: Request details — fields are filtered by role and state; includes `availableActions`
+      parameters: [{ $ref: '#/components/parameters/RequestId' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/RequestDetailEnvelope' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /service-requests/{requestId}/recommendations:
+    get:
+      tags: [Requests]
+      summary: Ranked eligible engineers (order + reasons only, never the raw score). State MATCHING.
+      parameters: [{ $ref: '#/components/parameters/RequestId' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { success: { type: boolean }, data: { type: array, items: { $ref: '#/components/schemas/Recommendation' } } } } } } }
+        '409': { $ref: '#/components/responses/InvalidState' }
+  /service-requests/{requestId}/select-engineer:
+    post:
+      tags: [Requests]
+      summary: Choose an engineer (re-checks eligibility server-side) MATCHING → ENGINEER_SELECTED
+      parameters: [{ $ref: '#/components/parameters/RequestId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [engineerId], properties: { engineerId: { type: string, format: uuid } } } } } }
+      responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } }
+  /service-requests/{requestId}/change-engineer:
+    post:
+      tags: [Requests]
+      summary: Drop the current engineer and go back to MATCHING (open quote is cancelled; engineer is excluded)
+      parameters: [{ $ref: '#/components/parameters/RequestId' }]
+      responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } }
+  /service-requests/{requestId}/accept:
+    post:
+      tags: [Requests]
+      summary: Engineer accepts the request ENGINEER_SELECTED → ENGINEER_ACCEPTED
+      parameters: [{ $ref: '#/components/parameters/RequestId' }]
+      responses: { '200': { $ref: '#/components/responses/Transitioned' }, '403': { $ref: '#/components/responses/Forbidden' }, '409': { $ref: '#/components/responses/InvalidState' } }
+  /service-requests/{requestId}/reject:
+    post:
+      tags: [Requests]
+      summary: Engineer declines → back to MATCHING, engineer excluded from this request
+      parameters: [{ $ref: '#/components/parameters/RequestId' }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { reason: { type: string, maxLength: 300 } } } } } }
+      responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } }
+  /service-requests/{requestId}/cancel:
+    post:
+      tags: [Requests]
+      summary: Customer cancels (free until CONFIRMED; later → dispute/admin)
+      parameters: [{ $ref: '#/components/parameters/RequestId' }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { reason: { type: string, maxLength: 300 } } } } } }
+      responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } }
+
+  /service-requests/{requestId}/quotes:
+    post:
+      tags: [Quotes]
+      summary: Engineer sends the main quote (total is computed by the server) → QUOTE_SENT
+      parameters: [{ $ref: '#/components/parameters/RequestId' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/QuoteInput' } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/QuoteEnvelope' } } } }
+        '409': { $ref: '#/components/responses/InvalidState' }
+        '422': { $ref: '#/components/responses/Validation' }
+    get:
+      tags: [Quotes]
+      summary: Quotes of the request (history, including rejected/expired)
+      parameters: [{ $ref: '#/components/parameters/RequestId' }]
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+  /quotes/{quoteId}/accept:
+    post:
+      tags: [Quotes]
+      summary: Customer accepts → quote ACCEPTED, request QUOTE_ACCEPTED, Job created (one DB transaction)
+      parameters: [{ $ref: '#/components/parameters/QuoteId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } }
+  /quotes/{quoteId}/reject:
+    post:
+      tags: [Quotes]
+      summary: Customer rejects → QUOTE_REJECTED
+      parameters: [{ $ref: '#/components/parameters/QuoteId' }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { reason: { type: string, enum: [PRICE_TOO_HIGH, NOT_WHAT_I_NEED, FOUND_ALTERNATIVE, OTHER] }, note: { type: string, maxLength: 300 } } } } } }
+      responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } }
+
+  /jobs/{jobId}:
+    get:
+      tags: [Jobs]
+      summary: Job with timeline, agreed total and payment summary
+      parameters: [{ $ref: '#/components/parameters/JobId' }]
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /jobs/{jobId}/start-trip:
+    post: { tags: [Jobs], summary: CONFIRMED → ON_THE_WAY, parameters: [{ $ref: '#/components/parameters/JobId' }], responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } } }
+  /jobs/{jobId}/arrive:
+    post: { tags: [Jobs], summary: ON_THE_WAY → ARRIVED, parameters: [{ $ref: '#/components/parameters/JobId' }], responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } } }
+  /jobs/{jobId}/start:
+    post: { tags: [Jobs], summary: ARRIVED → IN_PROGRESS, parameters: [{ $ref: '#/components/parameters/JobId' }], responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } } }
+  /jobs/{jobId}/complete:
+    post:
+      tags: [Jobs]
+      summary: IN_PROGRESS → COMPLETION_PENDING (blocked while an additional quote is pending)
+      parameters: [{ $ref: '#/components/parameters/JobId' }]
+      responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } }
+  /jobs/{jobId}/confirm-completion:
+    post:
+      tags: [Jobs]
+      summary: Customer confirms → COMPLETED
+      parameters: [{ $ref: '#/components/parameters/JobId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } }
+  /jobs/{jobId}/report-problem:
+    post:
+      tags: [Jobs]
+      summary: Customer reports a problem instead of confirming → opens a dispute, request stays COMPLETION_PENDING
+      parameters: [{ $ref: '#/components/parameters/JobId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [description], properties: { reason: { type: string }, description: { type: string, minLength: 5, maxLength: 1000 } } } } } }
+      responses: { '201': { $ref: '#/components/responses/Ok' }, '409': { $ref: '#/components/responses/InvalidState' } }
+  /jobs/{jobId}/additional-quotes:
+    post:
+      tags: [Quotes]
+      summary: Engineer asks for extra work while IN_PROGRESS (linked to the accepted main quote)
+      parameters: [{ $ref: '#/components/parameters/JobId' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/QuoteInput' } } } }
+      responses: { '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/QuoteEnvelope' } } } }, '409': { $ref: '#/components/responses/InvalidState' } }
+  /additional-quotes/{quoteId}/accept:
+    post: { tags: [Quotes], summary: Accept extra work (job continues), parameters: [{ $ref: '#/components/parameters/QuoteId' }], responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } } }
+  /additional-quotes/{quoteId}/reject:
+    post: { tags: [Quotes], summary: Reject extra work (engineer continues with the original scope or opens a dispute), parameters: [{ $ref: '#/components/parameters/QuoteId' }], responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } } }
+
+  /jobs/{jobId}/payments:
+    post:
+      tags: [Payments]
+      summary: |
+        Start a payment. The amount is NEVER taken from the body — it is the amount still due.
+        CASH (at QUOTE_ACCEPTED) confirms the booking. ONLINE returns a provider checkout URL;
+        the booking is confirmed only by the verified webhook.
+      parameters: [{ $ref: '#/components/parameters/JobId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [method], properties: { method: { $ref: '#/components/schemas/PaymentMethod' } } } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/PaymentEnvelope' } } } }
+        '409': { $ref: '#/components/responses/InvalidState' }
+    get:
+      tags: [Payments]
+      summary: Payments of a job (customer/engineer/admin per ownership)
+      parameters: [{ $ref: '#/components/parameters/JobId' }]
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+  /jobs/{jobId}/payments/confirm-cash:
+    post:
+      tags: [Payments]
+      summary: Engineer confirms cash received (only after COMPLETED)
+      parameters: [{ $ref: '#/components/parameters/JobId' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '409': { $ref: '#/components/responses/InvalidState' } }
+  /payments/webhook:
+    post:
+      tags: [Payments]
+      security: []
+      summary: Provider callback. No JWT — authenticated by signature. Idempotent; stores the raw event first.
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        '200': { description: Processed or duplicate (always 200 once the signature is valid) }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /payments/{paymentId}/refund:
+    post:
+      tags: [Admin]
+      summary: Admin refund (full or partial) — audited
+      parameters: [{ name: paymentId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [amount, reason], properties: { amount: { type: number, minimum: 0.01 }, reason: { type: string } } } } } }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '403': { $ref: '#/components/responses/Forbidden' } }
+
+  /jobs/{jobId}/review:
+    post:
+      tags: [Reviews]
+      summary: Customer rates the engineer (once; job COMPLETED [+ paid, per policy]) → request RATED
+      parameters: [{ $ref: '#/components/parameters/JobId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [rating], properties: { rating: { type: integer, minimum: 1, maximum: 5 }, comment: { type: string, maxLength: 1000 } } } } } }
+      responses: { '201': { $ref: '#/components/responses/Ok' }, '409': { $ref: '#/components/responses/InvalidState' } }
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: My notifications (newest first)
+      parameters: [{ name: unread, in: query, schema: { type: boolean } }, { $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+  /notifications/{id}/read:
+    post: { tags: [Notifications], summary: Mark one read, parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }], responses: { '204': { description: No content } } }
+  /notifications/read-all:
+    post: { tags: [Notifications], summary: Mark all read, responses: { '204': { description: No content } } }
+  /notifications/devices:
+    post: { tags: [Notifications], summary: Register a push token, responses: { '204': { description: No content } } }
+
+  /admin/engineers:
+    get:
+      tags: [Admin]
+      summary: Engineers with verification/account/availability filters (permission engineers.read)
+      parameters: [{ name: verification, in: query, schema: { $ref: '#/components/schemas/VerificationStatus' } }, { $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { $ref: '#/components/responses/Ok' } }
+  /admin/engineers/{engineerId}/verify:
+    post:
+      tags: [Admin]
+      summary: Approve or reject verification (PENDING only). Audited; notifies the engineer.
+      parameters: [{ $ref: '#/components/parameters/EngineerId' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [approved], properties: { approved: { type: boolean }, reason: { type: string, description: Required when approved=false } } } } } }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '409': { $ref: '#/components/responses/InvalidState' } }
+  /admin/engineers/{engineerId}/suspend:
+    post: { tags: [Admin], summary: Suspend (never deletes data; hides from matching; active jobs follow policy), parameters: [{ $ref: '#/components/parameters/EngineerId' }], responses: { '200': { $ref: '#/components/responses/Ok' } } }
+  /admin/engineers/{engineerId}/reinstate:
+    post: { tags: [Admin], summary: Lift a suspension, parameters: [{ $ref: '#/components/parameters/EngineerId' }], responses: { '200': { $ref: '#/components/responses/Ok' } } }
+  /admin/service-requests:
+    get: { tags: [Admin], summary: All requests (filters; `hasDispute=true` for the problem queue), parameters: [{ $ref: '#/components/parameters/StatusFilter' }, { $ref: '#/components/parameters/Cursor' }, { $ref: '#/components/parameters/Limit' }], responses: { '200': { $ref: '#/components/responses/Ok' } } }
+  /admin/service-requests/{requestId}/cancel:
+    post: { tags: [Admin], summary: Admin cancels (reason required; notifies both sides), parameters: [{ $ref: '#/components/parameters/RequestId' }], responses: { '200': { $ref: '#/components/responses/Transitioned' }, '409': { $ref: '#/components/responses/InvalidState' } } }
+  /admin/disputes:
+    get: { tags: [Admin], summary: Disputes queue, responses: { '200': { $ref: '#/components/responses/Ok' } } }
+  /admin/disputes/{disputeId}/resolve:
+    post: { tags: [Admin], summary: Resolve a dispute, parameters: [{ name: disputeId, in: path, required: true, schema: { type: string, format: uuid } }], responses: { '200': { $ref: '#/components/responses/Ok' } } }
+  /admin/payments:
+    get: { tags: [Admin], summary: Payments and totals (finance page), responses: { '200': { $ref: '#/components/responses/Ok' } } }
+  /admin/reviews:
+    get: { tags: [Admin], summary: Reviews for moderation, responses: { '200': { $ref: '#/components/responses/Ok' } } }
+  /admin/reviews/{reviewId}/hide:
+    post: { tags: [Admin], summary: Hide/unhide a review (recomputes rating), parameters: [{ name: reviewId, in: path, required: true, schema: { type: string, format: uuid } }], responses: { '200': { $ref: '#/components/responses/Ok' } } }
+  /admin/services:
+    post: { tags: [Admin], summary: Create a service, responses: { '201': { $ref: '#/components/responses/Ok' } } }
+  /admin/services/{serviceId}:
+    patch: { tags: [Admin], summary: Update / activate / deactivate a service, parameters: [{ $ref: '#/components/parameters/ServiceId' }], responses: { '200': { $ref: '#/components/responses/Ok' } } }
+  /admin/settings:
+    get: { tags: [Admin], summary: "Matching weights, commission, timeouts, enabled services", responses: { '200': { $ref: '#/components/responses/Ok' } } }
+    put:
+      tags: [Admin]
+      summary: Update settings (weights must total 100) — audited
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Settings' } } } }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '422': { $ref: '#/components/responses/Validation' } }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    RequestId: { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+    JobId: { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
+    QuoteId: { name: quoteId, in: path, required: true, schema: { type: string, format: uuid } }
+    EngineerId: { name: engineerId, in: path, required: true, schema: { type: string, format: uuid } }
+    ServiceId: { name: serviceId, in: path, required: true, schema: { type: string, format: uuid } }
+    Cursor: { name: cursor, in: query, schema: { type: string }, description: Opaque cursor from `meta.nextCursor` }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+    StatusFilter: { name: status, in: query, schema: { $ref: '#/components/schemas/RequestStatus' } }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, minLength: 8, maxLength: 80 }
+      description: Same key + same body replays the first response; same key + different body → 409 IDEMPOTENCY_CONFLICT. Recommended on every POST that moves money or state.
+  responses:
+    Ok: { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Envelope' } } } }
+    Transitioned:
+      description: State changed. Returns the new state and what the caller may do next.
+      content: { application/json: { schema: { $ref: '#/components/schemas/TransitionEnvelope' } } }
+    Validation: { description: Invalid input, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+    Unauthorized: { description: Not authenticated, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+    Forbidden: { description: Authenticated but not allowed, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+    NotFound: { description: Not found — also returned for resources the caller does not own, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+    Conflict: { description: Conflict, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+    InvalidState: { description: The resource's current state does not allow this action (INVALID_STATE_TRANSITION and friends), content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+    RateLimited: { description: Too many requests, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+  schemas:
+    Envelope:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, example: true }
+        data: {}
+        meta: { type: object, properties: { nextCursor: { type: string, nullable: true }, requestId: { type: string } } }
+    ErrorEnvelope:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, example: false }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { $ref: '#/components/schemas/ErrorCode' }
+            message: { type: string, description: Developer-facing English. Never shown to end users. }
+            details: { type: array, items: {} }
+    ErrorCode:
+      type: string
+      enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, INVALID_STATE_TRANSITION, PENDING_ADDITIONAL_QUOTE, ENGINEER_NOT_ELIGIBLE, ENGINEER_NOT_VERIFIED, ACCOUNT_SUSPENDED, PAYMENT_NOT_VERIFIED, IDEMPOTENCY_CONFLICT, CONFLICT, RATE_LIMITED, INTERNAL]
+    TransitionEnvelope:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            requestId: { type: string, format: uuid }
+            status: { $ref: '#/components/schemas/RequestStatus' }
+            availableActions: { type: array, items: { type: string }, description: Machine action names the caller may perform next }
+    RequestStatus:
+      type: string
+      enum: [REQUESTED, MATCHING, ENGINEER_SELECTED, ENGINEER_ACCEPTED, QUOTE_SENT, QUOTE_REJECTED, QUOTE_ACCEPTED, CONFIRMED, ON_THE_WAY, ARRIVED, IN_PROGRESS, COMPLETION_PENDING, COMPLETED, RATED, CANCELLED]
+    AvailabilityStatus: { type: string, enum: [AVAILABLE, OFFLINE, BUSY] }
+    VerificationStatus: { type: string, enum: [PENDING, VERIFIED, REJECTED] }
+    PaymentMethod: { type: string, enum: [CASH, ONLINE] }
+    PaymentStatus: { type: string, enum: [PENDING, PAID, FAILED, REFUNDED, PARTIALLY_REFUNDED] }
+    TimeSlot: { type: string, enum: [MORNING, NOON, EVENING] }
+    QuoteItemType: { type: string, enum: [LABOR, MATERIAL, OTHER] }
+    GeoPoint:
+      type: object
+      required: [latitude, longitude]
+      properties:
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+        address: { type: string, maxLength: 300 }
+        area: { type: string, maxLength: 80 }
+    RegisterInput:
+      type: object
+      required: [name, phone, password, role]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 80 }
+        phone: { type: string, example: '01000000000' }
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8, maxLength: 128 }
+        role: { type: string, enum: [CUSTOMER, ENGINEER], description: ADMIN accounts are never self-registered }
+        serviceIds: { type: array, items: { type: string, format: uuid }, description: Engineers only }
+        experienceYears: { type: integer, minimum: 0, maximum: 60 }
+        hasShop: { type: boolean }
+    LoginInput:
+      type: object
+      required: [identifier, password]
+      properties:
+        identifier: { type: string, description: Phone or email }
+        password: { type: string }
+    AuthResult:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            user: { type: object, properties: { id: { type: string }, name: { type: string }, role: { type: string, enum: [CUSTOMER, ENGINEER, ADMIN] } } }
+            accessToken: { type: string }
+            refreshToken: { type: string }
+    CreateRequestInput:
+      type: object
+      required: [serviceId, description, preferredDate, location]
+      properties:
+        serviceId: { type: string, format: uuid }
+        subService: { type: string, maxLength: 80 }
+        description: { type: string, minLength: 10, maxLength: 2000 }
+        preferredDate: { type: string, format: date }
+        preferredSlot: { $ref: '#/components/schemas/TimeSlot' }
+        preferredStartTime: { type: string, example: '17:00' }
+        preferredEndTime: { type: string, example: '19:00' }
+        location: { $ref: '#/components/schemas/GeoPoint' }
+        attachmentKeys: { type: array, maxItems: 8, items: { type: string } }
+    RequestSummaryEnvelope:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { type: object, properties: { id: { type: string, format: uuid }, number: { type: string, example: R-1064 }, status: { $ref: '#/components/schemas/RequestStatus' } } }
+    RequestDetailEnvelope:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            number: { type: string }
+            status: { $ref: '#/components/schemas/RequestStatus' }
+            service: { type: object }
+            location: { type: object, description: 'Engineer sees only `area` until CONFIRMED' }
+            customer: { type: object, description: 'Engineer sees first name only until CONFIRMED' }
+            engineer: { type: object, nullable: true }
+            quotes: { type: array, items: { $ref: '#/components/schemas/Quote' } }
+            job: { type: object, nullable: true }
+            payment: { $ref: '#/components/schemas/PaymentSummary' }
+            timeline: { type: array, items: { $ref: '#/components/schemas/TimelineEvent' } }
+            availableActions: { type: array, items: { type: string } }
+    TimelineEvent:
+      type: object
+      properties:
+        at: { type: string, format: date-time }
+        status: { $ref: '#/components/schemas/RequestStatus' }
+        code: { type: string, example: QUOTE_SENT }
+        actorRole: { type: string, enum: [CUSTOMER, ENGINEER, ADMIN, SYSTEM] }
+        data: { type: object }
+    Recommendation:
+      type: object
+      properties:
+        engineerId: { type: string, format: uuid }
+        name: { type: string }
+        area: { type: string }
+        rating: { type: number }
+        ratingCount: { type: integer }
+        completedJobs: { type: integer }
+        distanceKm: { type: number }
+        etaMinutes: { type: integer }
+        availability: { $ref: '#/components/schemas/AvailabilityStatus' }
+        reasons: { type: array, items: { type: string, enum: [NEARBY, TOP_RATED, AVAILABLE_NOW, EXPERIENCED] } }
+    QuoteInput:
+      type: object
+      required: [items, estimatedDurationMinutes]
+      description: No `total` field exists — totals are computed by the server.
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 30
+          items:
+            type: object
+            required: [type, description, quantity, unitPrice]
+            properties:
+              type: { $ref: '#/components/schemas/QuoteItemType' }
+              description: { type: string, maxLength: 200 }
+              quantity: { type: number, exclusiveMinimum: true, minimum: 0 }
+              unitPrice: { type: number, minimum: 0 }
+        estimatedDurationMinutes: { type: integer, minimum: 1 }
+        notes: { type: string, maxLength: 1000 }
+    Quote:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [MAIN, ADDITIONAL] }
+        status: { type: string, enum: [DRAFT, SENT, ACCEPTED, REJECTED, EXPIRED, CANCELLED] }
+        items: { type: array, items: { type: object } }
+        subtotal: { type: number }
+        total: { type: number }
+        estimatedDurationMinutes: { type: integer }
+        notes: { type: string }
+        expiresAt: { type: string, format: date-time, nullable: true }
+    QuoteEnvelope:
+      type: object
+      properties: { success: { type: boolean }, data: { $ref: '#/components/schemas/Quote' } }
+    PaymentSummary:
+      type: object
+      properties:
+        total: { type: number }
+        paid: { type: number }
+        due: { type: number }
+        state: { type: string, enum: [UNPAID, PARTIAL, PAID] }
+    PaymentEnvelope:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            paymentId: { type: string, format: uuid }
+            method: { $ref: '#/components/schemas/PaymentMethod' }
+            status: { $ref: '#/components/schemas/PaymentStatus' }
+            amount: { type: number }
+            checkoutUrl: { type: string, nullable: true, description: ONLINE only }
+    Settings:
+      type: object
+      properties:
+        weights:
+          type: object
+          required: [service, distance, availability, rating, experience]
+          properties:
+            service: { type: integer, minimum: 0 }
+            distance: { type: integer, minimum: 0 }
+            availability: { type: integer, minimum: 0 }
+            rating: { type: integer, minimum: 0 }
+            experience: { type: integer, minimum: 0 }
+        commissionPercent: { type: number, minimum: 0, maximum: 100, description: OPEN DECISION — illustrative 10 }
+        engineerResponseTimeoutMinutes: { type: integer, description: OPEN DECISION }
+        quoteValidityHours: { type: integer, description: OPEN DECISION }
+        enabledServiceIds: { type: array, items: { type: string, format: uuid } }
