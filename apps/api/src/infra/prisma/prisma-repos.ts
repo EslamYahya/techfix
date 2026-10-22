@@ -92,6 +92,7 @@ const requestAggregate = (r: RequestRow): RequestAggregate => ({
     preferredEndTime: r.preferredEndTime,
     status: r.status,
     selectedEngineerId: r.selectedEngineerId,
+    cancelReason: r.cancelReason,
     version: r.version,
     createdAt: r.createdAt,
     location: {
@@ -782,6 +783,10 @@ export function createPrismaRepos(connectionString: string): Repos {
         const q = await db.quote.findUnique({ where: { id }, include: quoteInclude });
         return q ? quoteRecord(q) : null;
       },
+      /** Test seam: move a quote's validity into the past without going through the service. */
+      async expire(id, expiresAt) {
+        await db.quote.update({ where: { id }, data: { expiresAt } });
+      },
       async sendMain(q, change) {
         try {
           return await db.$transaction(async (tx) => {
@@ -800,8 +805,12 @@ export function createPrismaRepos(connectionString: string): Repos {
       async acceptMain(quoteId, change) {
         try {
           return await db.$transaction(async (tx) => {
+            // The validity guard runs inside the transaction, on the row we are about to decide: an
+            // expired quote has to be refused by the database, not by the copy the caller read a
+            // moment earlier, which is stale as soon as anything else touches the quote.
             const q = await tx.quote.findUnique({ where: { id: quoteId } });
-            if (!q) throw new Stale();
+            if (!q || (q.status === 'SENT' && q.expiresAt !== null && q.expiresAt < new Date()))
+              throw new Stale();
             const won = await tx.quote.updateMany({
               where: { id: quoteId, status: 'SENT', kind: 'MAIN' },
               data: { status: 'ACCEPTED', decidedAt: new Date() },

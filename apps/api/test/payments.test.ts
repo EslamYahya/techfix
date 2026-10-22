@@ -12,6 +12,8 @@ const fawry = {
   calls: [] as { url: string; init?: RequestInit }[],
   fail: false,
   status: { paymentStatus: 'UNPAID' as string, orderAmount: undefined as number | undefined },
+  /** The reference Fawry issued per merchant reference, exactly as the real API echoes it back. */
+  refs: new Map<string, string>(),
   fetch: (async (url: string | URL, init?: RequestInit) => {
     const u = String(url);
     fawry.calls.push({ url: u, ...(init ? { init } : {}) });
@@ -20,14 +22,15 @@ const fawry = {
     if (fawry.fail) return json({}, false);
     if (u.includes('/payments/charge')) {
       const body = JSON.parse(String(init!.body));
-      return json({
-        statusCode: 200,
-        referenceNumber: `9${body.merchantRefNum.slice(0, 8).replace(/\D/g, '1')}`,
-      });
+      const ref = `9${body.merchantRefNum.slice(0, 8).replace(/\D/g, '1')}`;
+      fawry.refs.set(body.merchantRefNum, ref);
+      return json({ statusCode: 200, referenceNumber: ref });
     }
+    // Status v2 answers for one order: it echoes the reference number that was issued for it.
+    const refNum = new URL(u).searchParams.get('merchantRefNumber') ?? '';
     return json({
       statusCode: 200,
-      referenceNumber: '912345678',
+      referenceNumber: fawry.refs.get(refNum) ?? '912345678',
       paymentStatus: fawry.status.paymentStatus,
       orderAmount: fawry.status.orderAmount,
     });
@@ -382,12 +385,12 @@ describe('reconciliation', () => {
     // the callback was lost, but Fawry knows the order is paid
     fawry.status = { paymentStatus: 'PAID', orderAmount: 500 };
     const r = await a.post('/admin/payments/reconcile');
-    fawry.status = { paymentStatus: 'UNPAID', orderAmount: undefined };
     expect(r.body.data.paid).toBeGreaterThanOrEqual(1);
     expect(await status(s)).toBe('CONFIRMED');
     expect((await detail(s)).payment.state).toBe('PAID');
     expect(p.paymentId).toBeTruthy();
     // a second run has nothing left to do for it
+    fawry.status = { paymentStatus: 'UNPAID', orderAmount: undefined };
     expect((await a.post('/admin/payments/reconcile')).body.data.paid).toBe(0);
   });
 
@@ -397,12 +400,12 @@ describe('reconciliation', () => {
     await new Promise((r) => setTimeout(r, 5));
     fawry.status = { paymentStatus: 'PAID', orderAmount: 500 };
     await t.app.get(JOB_QUEUE).add(JOBS.reconcile, {}); // what the worker fires every few minutes
-    fawry.status = { paymentStatus: 'UNPAID', orderAmount: undefined };
     expect(await status(s)).toBe('CONFIRMED');
     const types = async (u: typeof s.cust) =>
       ((await u.get('/notifications')).body.data as { type: string }[]).map((n) => n.type);
     expect(await types(s.eng)).toContain('BOOKING_CONFIRMED');
     expect(await types(s.cust)).toContain('BOOKING_CONFIRMED'); // paid by the provider, not by the customer's click
+    fawry.status = { paymentStatus: 'UNPAID', orderAmount: undefined };
   });
 
   it('is for admins only', async () => {
@@ -494,6 +497,38 @@ describe('rating', () => {
     const s = await paidOnline();
     const other = await t.newUser('CUSTOMER');
     expect((await other.post(`/jobs/${s.jobId}/review`, { rating: 1 })).status).toBe(404);
+  });
+});
+
+describe('reconciliation without amounts', () => {
+  it('a PAID status that carries no amount pays nothing and leaves the booking waiting', async () => {
+    // Fawry's status v2 can answer "PAID" while the amounts are not settled yet. A verdict without
+    // the money behind it is not proof of payment: nothing changes and the audit trail says so.
+    const s = await accepted();
+    const p = await online(s);
+    const a = await t.admin();
+    await new Promise((r) => setTimeout(r, 5));
+    fawry.status = { paymentStatus: 'PAID', orderAmount: undefined };
+    const r = await a.post('/admin/payments/reconcile');
+    expect(r.body.data.paid).toBe(0);
+    expect(r.body.data.errors).toBe(0);
+    expect(await status(s)).toBe('QUOTE_ACCEPTED');
+    expect((await detail(s)).payment.state).toBe('UNPAID');
+    expect(p.paymentId).toBeTruthy();
+    // The order is untouched, so the retry can still settle it once the provider reports the amount.
+    expect((await a.post('/admin/payments/reconcile')).body.data.paid).toBe(0);
+  });
+
+  it('a FAILED status without an amount does fail the payment, so the customer can retry', async () => {
+    const s = await accepted();
+    await online(s);
+    const a = await t.admin();
+    await new Promise((r) => setTimeout(r, 5));
+    fawry.status = { paymentStatus: 'EXPIRED', orderAmount: undefined };
+    const r = await a.post('/admin/payments/reconcile');
+    expect(r.body.data.failed).toBeGreaterThanOrEqual(1);
+    expect((await detail(s)).payment.state).toBe('UNPAID');
+    fawry.status = { paymentStatus: 'UNPAID', orderAmount: undefined };
   });
 });
 

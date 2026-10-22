@@ -1,12 +1,12 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module.js';
-import { loadEnv } from '../config/env.js';
+import { loadEnv, loadWorkspaceEnv } from '../config/env.js';
 import { SeedService } from '../seed.service.js';
 
 // The script is run from apps/api, while the shared development environment
 // lives at the workspace root.
-process.loadEnvFile(new URL('../../../../.env', import.meta.url));
+loadWorkspaceEnv();
 
 const env = loadEnv();
 const app = await NestFactory.createApplicationContext(

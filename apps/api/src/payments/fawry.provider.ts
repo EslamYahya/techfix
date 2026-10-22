@@ -190,8 +190,12 @@ export class FawryProvider implements PaymentProvider {
     const s = r.data;
     const status = s.paymentStatus ?? s.orderStatus;
     if (!status || (s.statusCode !== undefined && s.statusCode !== 200)) return null;
-    const amount = s.orderAmount ?? s.paymentAmount;
-    if (amount === null || amount === undefined) return null;
+    // Status v2 reports `paymentStatus` (or `orderStatus`) and may omit `orderAmount`/`paymentAmount`
+    // — Fawry's own status examples carry only the status. The verdict still has to reach the
+    // caller: "UNPAID" must leave the payment pending and "EXPIRED" must fail it. A missing amount
+    // is not an unusable reply, so it is passed on as null and the money check in `decideWebhook`
+    // refuses to act on a success it cannot verify.
+    const amount = s.orderAmount ?? s.paymentAmount ?? null;
     const providerRef = s.referenceNumber ?? s.fawryRefNumber ?? null;
     return {
       externalId: `status:${ref}:${status}`,

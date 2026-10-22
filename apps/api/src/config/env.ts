@@ -75,6 +75,20 @@ const schema = z
 export type Env = Omit<z.infer<typeof schema>, 'RUN_WORKERS'> & { RUN_WORKERS: boolean };
 export const ENV = Symbol('ENV');
 
+/**
+ * The API runs from `apps/api`, while the shared development environment lives at the workspace root.
+ * Loaded by the process entrypoints only — never at import time, so tests that pass an explicit
+ * `source` to `loadEnv()` are unaffected. In a container the environment is injected by compose
+ * (`.dockerignore` excludes `.env`), so a missing file stays a no-op instead of crashing startup.
+ */
+export function loadWorkspaceEnv(): void {
+  try {
+    process.loadEnvFile(new URL('../../../../.env', import.meta.url));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const parsed = schema.safeParse(source);
   if (!parsed.success) {

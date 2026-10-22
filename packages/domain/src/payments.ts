@@ -49,13 +49,16 @@ export type WebhookEffect =
   | { kind: 'IGNORE_DUPLICATE' }
   | { kind: 'MARK_PAID'; confirmBooking: boolean }
   | { kind: 'MARK_FAILED' }
-  | { kind: 'AMOUNT_MISMATCH' };
+  | { kind: 'AMOUNT_MISMATCH' }
+  /** The provider gave a verdict without the amounts we need to check it against. Nothing changes. */
+  | { kind: 'IGNORED_UNVERIFIED' };
 
 export function decideWebhook(input: {
   alreadyProcessed: boolean;
   signatureOk: boolean;
   providerStatus: 'SUCCESS' | 'FAILED';
-  providerAmount: number;
+  /** Null/undefined when the provider did not report an amount for this order. */
+  providerAmount: number | null | undefined;
   payment: { status: PaymentStatus; amount: number };
   requestStatus: string;
 }): WebhookEffect {
@@ -63,6 +66,12 @@ export function decideWebhook(input: {
   if (input.alreadyProcessed || input.payment.status !== 'PENDING')
     return { kind: 'IGNORE_DUPLICATE' };
   if (input.providerStatus === 'FAILED') return { kind: 'MARK_FAILED' };
+  // A status reply may arrive without the amounts (Fawry's status v2 reports the status and can omit
+  // orderAmount/paymentAmount). Nothing is paid on a success we cannot check the money for: the
+  // amount we charged is the only one we accept, and a status alone cannot prove it was paid. This is
+  // also what keeps a reconciliation that lost the amounts from paying an unpaid order.
+  if (input.providerAmount === null || input.providerAmount === undefined)
+    return { kind: 'IGNORED_UNVERIFIED' };
   if (round2(input.providerAmount) !== round2(input.payment.amount))
     return { kind: 'AMOUNT_MISMATCH' };
   return { kind: 'MARK_PAID', confirmBooking: input.requestStatus === 'QUOTE_ACCEPTED' };

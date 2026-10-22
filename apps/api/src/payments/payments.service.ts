@@ -242,6 +242,12 @@ export class PaymentsService {
     });
 
     if (effect.kind === 'IGNORE_DUPLICATE') return 'DUPLICATE';
+    // The provider answered, but without the amounts we can check the money against: audited and
+    // left alone rather than paid or failed on an unverifiable verdict. The next run re-asks.
+    if (effect.kind === 'IGNORED_UNVERIFIED') {
+      await this.system('payment.unverified_status', payment.id, { source });
+      return 'IGNORED';
+    }
     if (effect.kind === 'AMOUNT_MISMATCH') {
       // Money of a different size than we asked for is never accepted automatically.
       await this.system('payment.amount_mismatch', payment.id, {

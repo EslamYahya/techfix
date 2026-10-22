@@ -2,11 +2,12 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module.js';
-import { loadEnv } from './config/env.js';
+import { loadEnv, loadWorkspaceEnv } from './config/env.js';
 import { SeedService } from './seed.service.js';
 import { configureApp } from './setup.js';
 
 async function bootstrap() {
+  loadWorkspaceEnv();
   const env = loadEnv();
   const app = await NestFactory.create(AppModule.forRoot(env), { bufferLogs: true });
   app.useLogger(app.get(Logger));

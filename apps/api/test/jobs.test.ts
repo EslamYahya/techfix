@@ -157,10 +157,36 @@ describe('main quote', () => {
 
   it('an expired quote cannot be accepted', async () => {
     const s = await quoted();
+    // Expire the stored row itself: mutating a copy the repository hands out does not reach the
+    // database, so it proves nothing about the adapter's own guard.
+    await t.repos.quotes.expire(s.quoteId, new Date(Date.now() - 1000));
     const q = (await t.repos.quotes.get(s.quoteId))!;
-    q.expiresAt = new Date(Date.now() - 1000);
+    expect(q.expiresAt!.getTime()).toBeLessThan(Date.now());
     const res = await s.cust.post(`/quotes/${s.quoteId}/accept`);
     expect(res.status).toBe(409);
+    // Nothing was decided: the request is still waiting for the customer to accept the quote.
+    expect((await s.cust.get(`/service-requests/${s.id}`)).body.data.status).toBe('QUOTE_SENT');
+  });
+
+  it('an expired quote is refused when the row expires between the read and the write', async () => {
+    // The service loads the quote, then the repository decides. Expiring the stored row while that
+    // load is in flight leaves the service holding a valid copy and the database holding an expired
+    // one — the repository has to make the call against the row it is actually deciding on.
+    const s = await quoted();
+    const realGet = t.repos.quotes.get.bind(t.repos.quotes);
+    let patched = false;
+    t.repos.quotes.get = (async (id: string) => {
+      const row = await realGet(id);
+      if (!patched && id === s.quoteId) {
+        patched = true;
+        await t.repos.quotes.expire(id, new Date(Date.now() - 1000));
+      }
+      return row; // still the valid copy the service read before the row moved
+    }) as typeof t.repos.quotes.get;
+    const res = await s.cust.post(`/quotes/${s.quoteId}/accept`);
+    expect(res.status).toBe(409);
+    // Nothing was decided: the request is still waiting for the customer to accept the quote.
+    expect((await s.cust.get(`/service-requests/${s.id}`)).body.data.status).toBe('QUOTE_SENT');
   });
 });
 

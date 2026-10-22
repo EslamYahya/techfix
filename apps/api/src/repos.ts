@@ -385,6 +385,10 @@ export interface QuotesRepo {
   /** Quote SENT→ACCEPTED, request change, and the Job is created — together. */
   acceptMain(quoteId: string, change: RequestChange): Promise<JobRecord | null>;
   rejectMain(quoteId: string, reason: string | null, change: RequestChange): Promise<boolean>;
+  /** Records a quote's validity as ended. Used by the tests to put a quote past its TTL, and the
+   *  shape a scheduled "expire open quotes" job would call once that policy exists (see the launch
+   *  checklist, gate 4). */
+  expire(id: string, expiresAt: Date): Promise<void>;
   /** Throws PENDING_ADDITIONAL_QUOTE when one is already waiting; null when the request moved. */
   sendAdditional(q: NewQuote, expectedVersion: number): Promise<QuoteRecord | null>;
   decideAdditional(

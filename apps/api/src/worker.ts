@@ -2,10 +2,11 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module.js';
-import { loadEnv } from './config/env.js';
+import { loadEnv, loadWorkspaceEnv } from './config/env.js';
 
 /** Background-only process: same code, no HTTP port. `pnpm --filter @techfix/api worker`. */
 async function bootstrap() {
+  loadWorkspaceEnv();
   const env = { ...loadEnv(), RUN_WORKERS: true };
   const app = await NestFactory.createApplicationContext(AppModule.forRoot(env), {
     bufferLogs: true,

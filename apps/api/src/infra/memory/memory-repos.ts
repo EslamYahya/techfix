@@ -616,6 +616,12 @@ export function createMemoryRepos(): Repos & { audits: AuditEntry[] } {
       async get(id) {
         return quotes.get(id) ?? null;
       },
+      /** Test seam: move a quote's validity into the past without going through the service. */
+      async expire(id, expiresAt) {
+        const q = quotes.get(id);
+        if (!q) return;
+        quotes.set(id, { ...q, expiresAt });
+      },
       async sendMain(q, change) {
         const r = reqs.get(q.requestId);
         if (!r || r.version !== change.expectedVersion || r.status !== change.from) return null;
@@ -626,6 +632,9 @@ export function createMemoryRepos(): Repos & { audits: AuditEntry[] } {
       async acceptMain(quoteId, change) {
         const q = quotes.get(quoteId);
         if (!q || q.status !== 'SENT') return null;
+        // Same rule as the PostgreSQL adapter: a quote whose validity passed is not acceptable, and
+        // the check must look at the stored row, not a caller's earlier copy of it.
+        if (q.expiresAt && q.expiresAt.getTime() < Date.now()) return null;
         const r = reqs.get(q.requestId);
         if (!r || !applyReq(q.requestId, change)) return null;
         quotes.set(q.id, { ...q, status: 'ACCEPTED', decidedAt: new Date() });

@@ -59,6 +59,30 @@ describe('payments', () => {
       confirmBooking: false,
     });
   });
+  it('a provider status without an amount pays nothing (it is audited and re-asked)', () => {
+    const base = {
+      alreadyProcessed: false,
+      signatureOk: true,
+      payment: { status: 'PENDING' as const, amount: 2300 },
+      requestStatus: 'QUOTE_ACCEPTED',
+    };
+    // "PAID" with no amount is not proof of payment: the order may still be unpaid at the outlet.
+    expect(decideWebhook({ ...base, providerStatus: 'SUCCESS', providerAmount: null })).toEqual({
+      kind: 'IGNORED_UNVERIFIED',
+    });
+    expect(
+      decideWebhook({ ...base, providerStatus: 'SUCCESS', providerAmount: undefined }),
+    ).toEqual({ kind: 'IGNORED_UNVERIFIED' });
+    // A failure verdict needs no amount to be actionable: the customer can retry.
+    expect(decideWebhook({ ...base, providerStatus: 'FAILED', providerAmount: null })).toEqual({
+      kind: 'MARK_FAILED',
+    });
+    // With an amount, the money check still happens.
+    expect(decideWebhook({ ...base, providerStatus: 'SUCCESS', providerAmount: 2300 })).toEqual({
+      kind: 'MARK_PAID',
+      confirmBooking: true,
+    });
+  });
   it('payment creation takes the amount from the server, only in valid states', () => {
     const due = paymentSummary(2300, []);
     expect(

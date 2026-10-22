@@ -29,8 +29,11 @@ export interface ProviderEvent {
   externalId: string;
   paymentId: string;
   outcome: ProviderOutcome;
-  /** The amount of OUR order as the provider recorded it (never includes the provider's fees). */
-  amount: number;
+  /** The amount of OUR order as the provider recorded it (never includes the provider's fees).
+   *  Null when the provider's status reply did not carry it — Fawry's status v2 reports the status
+   *  and may omit the amounts, and a success that cannot be checked against our own amount is not
+   *  acted on (see `decideWebhook`). */
+  amount: number | null;
   providerRef: string | null;
   failureReason: string | null;
 }
