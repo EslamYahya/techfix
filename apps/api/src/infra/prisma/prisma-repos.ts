@@ -92,7 +92,6 @@ const requestAggregate = (r: RequestRow): RequestAggregate => ({
     preferredEndTime: r.preferredEndTime,
     status: r.status,
     selectedEngineerId: r.selectedEngineerId,
-    cancelReason: r.cancelReason,
     version: r.version,
     createdAt: r.createdAt,
     location: {
@@ -209,7 +208,7 @@ function pageOut<R extends { id: string; createdAt: Date }, T>(
 
 const disputeInclude = {
   openedBy: true,
-  job: { include: { request: { select: { id: true, number: true } } } },
+  job: { include: { request: { select: { id: true, publicNumber: true } } } },
 } satisfies Prisma.DisputeInclude;
 const disputeRow = (
   d: Prisma.DisputeGetPayload<{ include: typeof disputeInclude }>,
@@ -217,7 +216,7 @@ const disputeRow = (
   id: d.id,
   jobId: d.jobId,
   requestId: d.job.request.id,
-  requestNumber: d.job.request.number,
+  requestNumber: d.job.request.publicNumber,
   openedByUserId: d.openedByUserId,
   openedByName: d.openedBy.name,
   openedByRole: d.openedBy.role,
@@ -231,7 +230,7 @@ const disputeRow = (
 const adminReviewInclude = {
   customer: { include: { user: true } },
   engineer: { include: { user: true } },
-  job: { include: { request: { select: { number: true } } } },
+  job: { include: { request: { select: { publicNumber: true } } } },
 } satisfies Prisma.ReviewInclude;
 const adminReviewRow = (
   r: Prisma.ReviewGetPayload<{ include: typeof adminReviewInclude }>,
@@ -246,7 +245,7 @@ const adminReviewRow = (
   createdAt: r.createdAt,
   customerName: r.customer.user.name,
   engineerName: r.engineer.user.name,
-  requestNumber: r.job.request.number,
+  requestNumber: r.job.request.publicNumber,
 });
 
 const reviewInclude = { customer: { include: { user: true } } } satisfies Prisma.ReviewInclude;
@@ -1000,6 +999,7 @@ export function createPrismaRepos(connectionString: string): Repos {
           let changed = false;
           if (change) {
             const p = await tx.payment.findUniqueOrThrow({ where: { id }, include: { job: true } });
+            const r = await tx.serviceRequest.findUniqueOrThrow({ where: { id: p.job.requestId } });
             changed = await applyChange(tx, p.job.requestId, change);
           }
           return { settled: true, changed };
@@ -1194,13 +1194,16 @@ export function createPrismaRepos(connectionString: string): Repos {
       },
       async lease(limit, leaseSeconds) {
         // Atomic hand-out: SKIP LOCKED lets several workers poll the same table without overlap.
+        // Use the application clock so retry timing is deterministic in workers and tests;
+        // PostgreSQL's `now()` otherwise ignores a mocked application clock.
+        const now = new Date();
         const rows = await db.$queryRaw<
           { id: string; type: string; payload: Record<string, unknown>; attempts: number }[]
         >`
           UPDATE outbox_events SET attempts = attempts + 1,
-                 next_run_at = now() + (${leaseSeconds} * interval '1 second')
+                 next_run_at = ${new Date(now.getTime() + leaseSeconds * 1000)}
            WHERE id IN (SELECT id FROM outbox_events
-                         WHERE published_at IS NULL AND next_run_at <= now()
+                         WHERE published_at IS NULL AND next_run_at <= ${now}
                          ORDER BY next_run_at LIMIT ${limit} FOR UPDATE SKIP LOCKED)
           RETURNING id, type, payload, attempts`;
         return rows.map((r) => ({
@@ -1256,7 +1259,7 @@ export function createPrismaRepos(connectionString: string): Repos {
         });
         return pageOut(rows, q.limit, (r) => ({
           id: r.id,
-          number: r.number,
+          number: r.publicNumber,
           status: r.status,
           serviceName: r.service.name,
           customerName: r.customer.user.name,
@@ -1275,7 +1278,7 @@ export function createPrismaRepos(connectionString: string): Repos {
           include: {
             job: {
               include: {
-                request: { select: { id: true, number: true } },
+                request: { select: { id: true, publicNumber: true } },
                 customer: { include: { user: true } },
                 engineer: { include: { user: true } },
               },
@@ -1287,7 +1290,7 @@ export function createPrismaRepos(connectionString: string): Repos {
         return pageOut(rows, q.limit, (p) => ({
           ...paymentRecord(p),
           requestId: p.job.request.id,
-          requestNumber: p.job.request.number,
+          requestNumber: p.job.request.publicNumber,
           customerName: p.job.customer.user.name,
           engineerName: p.job.engineer.user.name,
         }));

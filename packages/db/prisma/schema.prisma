@@ -1,6 +1,6 @@
 // TechFix — Data model (Release v1 + final-product placeholders)
-// Source of truth: docs/02-data-model.md. PostGIS columns are added in SQL migration
-// (see prisma/migrations-notes/postgis.sql) because Prisma models them as Unsupported().
+// Source of truth: docs/02-data-model.md. PostGIS columns are added in the initial
+// SQL migration because Prisma models them as Unsupported().
 
 generator client {
   provider = "prisma-client"
@@ -8,7 +8,7 @@ generator client {
 }
 
 // Prisma 7: the connection URL lives in prisma.config.ts, not here.
-// PostGIS is enabled by prisma/notes/postgis.sql (CREATE EXTENSION) in the first migration.
+// PostGIS is enabled by the initial SQL migration (CREATE EXTENSION).
 datasource db {
   provider = "postgresql"
 }

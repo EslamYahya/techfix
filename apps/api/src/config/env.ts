@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+const optionalEnv = <T extends z.ZodType>(schema: T) =>
+  z.preprocess((value) => (value === '' ? undefined : value), schema.optional());
+
 const schema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -21,10 +24,10 @@ const schema = z
     AUTH_LOGIN_MAX_PER_15MIN: z.coerce.number().int().positive().default(10),
     AUTH_REGISTER_MAX_PER_HOUR: z.coerce.number().int().positive().default(20),
     // Fawry (online payment). All three of MERCHANT_CODE / SECURITY_KEY / BASE_URL enable it; otherwise only cash works.
-    FAWRY_MERCHANT_CODE: z.string().min(1).optional(),
-    FAWRY_SECURITY_KEY: z.string().min(1).optional(),
-    FAWRY_BASE_URL: z.url().optional(),
-    FAWRY_WEBHOOK_URL: z.url().optional(),
+    FAWRY_MERCHANT_CODE: optionalEnv(z.string().min(1)),
+    FAWRY_SECURITY_KEY: optionalEnv(z.string().min(1)),
+    FAWRY_BASE_URL: optionalEnv(z.url()),
+    FAWRY_WEBHOOK_URL: optionalEnv(z.url()),
     FAWRY_FALLBACK_EMAIL: z.string().default('no-reply@techfix.invalid'),
     /** How long a Fawry reference can be paid. OPEN DECISION (24h placeholder). */
     PAYMENT_EXPIRY_HOURS: z.coerce.number().positive().default(24),

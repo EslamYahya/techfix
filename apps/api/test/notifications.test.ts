@@ -96,7 +96,7 @@ describe('notifications follow the request', () => {
     expect(n.data.requestId).toBe(id);
     expect(n.body).toMatch(/[؀-ۿ]/);
     expect(n.body).not.toContain('{n}');
-    expect(n.body).toMatch(/TF-\d+|\d{4}/);
+    expect(n.body).toMatch(/R-\d+/);
   });
 
   it('notifies the engineer who was replaced, after the request already forgot him', async () => {

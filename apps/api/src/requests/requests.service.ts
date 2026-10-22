@@ -77,6 +77,7 @@ const StatusQuery = z.enum(REQUEST_STATUSES);
 const cairoToday = () =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
 const isUuid = (s: string) => z.uuid().safeParse(s).success;
+/** Stable public reference used in customer communications and support. */
 export const numberOf = (n: number) => `R-${n}`;
 
 type Role = Actor['role'];

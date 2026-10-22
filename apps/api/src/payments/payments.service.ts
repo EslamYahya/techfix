@@ -229,7 +229,6 @@ export class PaymentsService {
     if (ev.outcome === 'PENDING') return 'IGNORED';
     const job = (await this.repos.jobs.get(payment.jobId))!;
     const agg = (await this.repos.requests.get(job.requestId))!;
-
     const effect = decideWebhook({
       alreadyProcessed: false,
       signatureOk: true, // verified by the provider adapter before we get here

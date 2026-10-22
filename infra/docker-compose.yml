@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: techfix
       POSTGRES_PASSWORD: techfix
       POSTGRES_DB: techfix
-    ports: ['5432:5432']
+    ports: ['5434:5432']
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U techfix']
@@ -20,7 +20,12 @@ services:
       interval: 5s
       retries: 10
   minio:
-    image: minio/minio:latest
+    build:
+      context: ..
+      dockerfile: infra/docker/minio.Dockerfile
+      args:
+        MINIO_RELEASE: RELEASE.2025-10-15T17-29-55Z
+    image: techfix-minio:local
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: techfix
